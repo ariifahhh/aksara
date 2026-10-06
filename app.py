@@ -1,11 +1,16 @@
 import os, json, time, re
 import gradio as gr
-import numpy as np
-import faiss
 
-from sentence_transformers import SentenceTransformer
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from peft import PeftModel
+# Local previews use the existing Space API. Hosted Spaces retain local inference.
+BACKEND = os.environ.get("AKSARA_BACKEND", "local" if os.environ.get("SPACE_ID") else "space")
+if BACKEND not in {"local", "space"}:
+    raise ValueError("AKSARA_BACKEND must be 'local' or 'space'")
+if BACKEND == "local":
+    import numpy as np
+    import faiss
+    from sentence_transformers import SentenceTransformer
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+    from peft import PeftModel
 
 # ---------- Paths inside the Space ----------
 ART_DIR     = "artifacts"
@@ -142,39 +147,16 @@ def answer(question, top_k, use_extraction, use_lora):
     )
 
 # ---------- Build UI ----------
+from aksara_ui import build_ui
+
 names = proverb_names_from_passages(PASSAGES, limit=300)
-example_qs = [[mk_q(n)] for n in (names[:5] if len(names) >= 5 else ["Makan puji","Makan puluk","Makan pokok","Makan ransom","Pujaan"])]
-
-with gr.Blocks(theme=gr.themes.Soft(), title="Peribahasa RAG — Qwen + LoRA") as demo:
-    gr.Markdown("## 🇲🇾 Peribahasa QA — Retrieval-Augmented Generation (Qwen + LoRA)")
-
-    with gr.Row():
-        with gr.Column(scale=2):
-            q_in = gr.Textbox(label="Soalan (Malay)", value="Apakah maksud peribahasa Makan puji?")
-            gr.Examples(label="Contoh (klik untuk guna)", examples=example_qs, inputs=q_in)
-
-            with gr.Row():
-                dd = gr.Dropdown(choices=names, label="Pilih peribahasa (dropdown)", value=(names[0] if names else None))
-                fill_btn = gr.Button("Gunakan peribahasa terpilih")
-
-            topk = gr.Slider(1, 5, value=1, step=1, label="Top-k (retrieval)")
-            use_extraction = gr.Checkbox(value=True, label="Use exact-gloss extraction (recommended)")
-
-        with gr.Column(scale=1):
-            use_lora = gr.Checkbox(value=True, label="Use LoRA adapter (if available)")
-            gr.Markdown("*(Model paths are fixed in this Space. LoRA is optional.)*")
-
-    go = gr.Button("Jawab", variant="primary")
-
-    q_out  = gr.Textbox(label="Question (echo)", interactive=False)
-    ctx_out = gr.Textbox(label="Retrieved Context", lines=6, interactive=False)
-    ans_out = gr.Textbox(label="Answer", lines=2, interactive=False)
-    lat_out = gr.Textbox(label="Latency", interactive=False)
-    stat_out = gr.Textbox(label="Status", interactive=False)
-
-    fill_btn.click(lambda n: mk_q(n), inputs=dd, outputs=q_in)
-    go.click(answer, inputs=[q_in, topk, use_extraction, use_lora],
-            outputs=[q_out, ctx_out, ans_out, lat_out, stat_out])
+if BACKEND == "space":
+    from remote_backend import answer_remote, SPACE_ID
+    if os.environ.get("SPACE_ID") == SPACE_ID:
+        raise ValueError("A Space cannot use itself as its remote backend")
+    demo = build_ui(answer_remote, names, mk_q, BASE_MODEL, lambda: None, remote_space=SPACE_ID)
+else:
+    demo = build_ui(answer, names, mk_q, BASE_MODEL, lambda: isinstance(_gen, PeftModel))
 
 if __name__ == "__main__":
     # Spaces auto-sets host/port; no need to pass server_name/port
